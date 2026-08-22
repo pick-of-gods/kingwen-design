@@ -15,7 +15,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 
 // Claude Code owns its own auth resolution. Preserve credentials from the
 // inherited environment so users who run the local CLI with API-key auth get
-// the same behavior through Open Design.
+// the same behavior through OpenDesign.
 test('spawnEnvForAgent preserves inherited Anthropic API credentials for the claude adapter', () => {
   const env = spawnEnvForAgent('claude', {
     ANTHROPIC_API_KEY: 'sk-leak',
@@ -80,6 +80,60 @@ test('spawnEnvForAgent applies configured Codex env without mutating the base en
   assert.equal(env.PATH, '/usr/bin');
   assert.equal('CODEX_HOME' in base, false);
   assert.equal('CODEX_BIN' in base, false);
+});
+
+test('spawnEnvForAgent backfills Windows cache directory env for Trae CLI launches', () => {
+  const env = withPlatform('win32', () =>
+    spawnEnvForAgent(
+      'trae-cli',
+      {
+        Path: 'C:\\Windows\\System32',
+        USERPROFILE: 'C:\\Users\\ai',
+      },
+      {},
+      {},
+    ),
+  );
+
+  assert.equal(env.USERPROFILE, 'C:\\Users\\ai');
+  assert.equal(env.APPDATA, 'C:\\Users\\ai\\AppData\\Roaming');
+  assert.equal(env.LOCALAPPDATA, 'C:\\Users\\ai\\AppData\\Local');
+  assert.equal(env.TEMP, 'C:\\Users\\ai\\AppData\\Local\\Temp');
+  assert.equal(env.TMP, 'C:\\Users\\ai\\AppData\\Local\\Temp');
+});
+
+test('spawnEnvForAgent keeps Windows cache directory env inside sandbox roots', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'od-agent-env-sandbox-win-cache-'));
+  try {
+    const env = withPlatform('win32', () =>
+      spawnEnvForAgent(
+        'trae-cli',
+        {
+          OD_DATA_DIR: dataDir,
+          OD_SANDBOX_MODE: '1',
+          Path: 'C:\\Windows\\System32',
+          USERPROFILE: 'C:\\Users\\ai',
+        },
+        {},
+        {},
+      ),
+    );
+
+    const agentHome = join(dataDir, 'sandbox', 'agent-home');
+    const tempDir = join(dataDir, 'sandbox', 'tmp');
+    const normalize = (value: string | undefined): string =>
+      (value ?? '').replaceAll('\\', '/');
+
+    assert.equal(env.USERPROFILE, agentHome);
+    assert.ok(normalize(env.APPDATA).startsWith(`${normalize(agentHome)}/`));
+    assert.ok(normalize(env.LOCALAPPDATA).startsWith(`${normalize(agentHome)}/`));
+    assert.equal(env.TEMP, tempDir);
+    assert.equal(env.TMP, tempDir);
+    assert.ok(!normalize(env.APPDATA).includes('C:/Users/ai'));
+    assert.ok(!normalize(env.LOCALAPPDATA).includes('C:/Users/ai'));
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test('spawnEnvForAgent reapplies sandbox state roots after configured env overrides', () => {
@@ -284,7 +338,7 @@ test('spawnEnvForAgent injects the resolved AMR profile after configured env', (
   const env = spawnEnvForAgent(
     'amr',
     {
-      OPEN_DESIGN_AMR_PROFILE: 'test',
+      OPEN_DESIGN_AMR_PROFILE: 'feature-test',
       VELA_PROFILE: 'prod',
       PATH: '/usr/bin',
     },
@@ -293,9 +347,24 @@ test('spawnEnvForAgent injects the resolved AMR profile after configured env', (
     },
   );
 
-  assert.equal(env.VELA_PROFILE, 'test');
-  assert.equal(env.OPEN_DESIGN_AMR_PROFILE, 'test');
+  assert.equal(env.VELA_PROFILE, 'feature-test');
+  assert.equal(env.OPEN_DESIGN_AMR_PROFILE, 'feature-test');
   assert.equal(env.PATH, '/usr/bin');
+});
+
+test('spawnEnvForAgent enables OpenCode web search providers for AMR by default', () => {
+  const env = spawnEnvForAgent('amr', { PATH: '/usr/bin' });
+
+  assert.equal(env.OPENCODE_ENABLE_EXA, '1');
+  assert.equal(env.VELA_ENABLE_PARALLEL_MCP, '1');
+
+  const overridden = spawnEnvForAgent('amr', {
+    OPENCODE_ENABLE_EXA: '0',
+    VELA_ENABLE_PARALLEL_MCP: '0',
+    PATH: '/usr/bin',
+  });
+  assert.equal(overridden.OPENCODE_ENABLE_EXA, '0');
+  assert.equal(overridden.VELA_ENABLE_PARALLEL_MCP, '0');
 });
 
 test('spawnEnvForAgent gives AMR a stable OpenCode home under OD_DATA_DIR', () => {
@@ -1232,7 +1301,7 @@ test('spawnEnvForAgent preserves Anthropic credentials for non-claude adapters',
 
 // Codex CLI owns its own auth resolution. Preserve credentials from the
 // inherited environment so users who run the local CLI with API-key auth get
-// the same behavior through Open Design.
+// the same behavior through OpenDesign.
 test('spawnEnvForAgent preserves inherited OPENAI_API_KEY for the codex adapter', () => {
   const env = spawnEnvForAgent('codex', {
     OPENAI_API_KEY: 'sk-stale-byok',
