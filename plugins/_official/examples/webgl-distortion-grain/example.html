@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Distortion &amp; Grain — Open Design</title>
+<title>Distortion &amp; Grain — OpenDesign</title>
 <!--
   Faithful single-file port of jankohlbach's "On-Scroll Image Distortion & Grain"
   (Codrops, MIT). Original: https://github.com/jankohlbach/codrops-shader-on-scroll
@@ -35,7 +35,7 @@
 </head>
 <body>
 <canvas id="gl"></canvas>
-<div class="frame"><span><span class="dot"></span>Open Design · WebGL Preview</span>
+<div class="frame"><span><span class="dot"></span>OpenDesign · WebGL Preview</span>
   <span>Effect: <a href="https://github.com/jankohlbach/codrops-shader-on-scroll" target="_blank">Jan Kohlbach / Codrops</a></span></div>
 <div class="wrap">
   <header class="intro"><h1>Scroll to<br>Distort</h1>
@@ -138,11 +138,12 @@ class Media{
   }
 }
 let prevY=window.scrollY, vel=0;
-function resize(){ renderer.setSize(innerWidth,innerHeight); camera.aspect=innerWidth/innerHeight; camera.fov=calcFov(CAMERA_POS); camera.updateProjectionMatrix(); store.forEach(m=>m.measure()); }
+function resize(){ const w=innerWidth,h=innerHeight; if(w===resize._w&&h===resize._h)return; resize._w=w; resize._h=h;
+  renderer.setSize(w,h); camera.aspect=w/h; camera.fov=calcFov(CAMERA_POS); camera.updateProjectionMatrix(); store.forEach(m=>m.measure()); }
 addEventListener('resize',resize);
 function boot(){
   document.querySelectorAll('img[data-gl]').forEach(im=>store.push(new Media(im)));
-  (function frame(t){ requestAnimationFrame(frame); const time=(t||0)/1000;
+  (function frame(t){ requestAnimationFrame(frame); resize(); const time=(t||0)/1000;
     const y=window.scrollY; const raw=y-prevY; prevY=y; vel=lerp(vel,raw*0.06,0.1);   // smoothed scroll velocity
     store.forEach(m=>m.update(y,vel,time)); renderer.render(scene,camera);
   })();

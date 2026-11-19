@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Voronoi Cells — Open Design</title>
+<title>Voronoi Cells — OpenDesign</title>
 <!--
   Self-contained WebGL2 hero. An animated Voronoi network: jittered feature
   points drift, cell interiors take a palette by cell id, and edges glow along
@@ -27,7 +27,7 @@
 <body>
 <canvas id="gl"></canvas>
 <div class="overlay">
-  <div class="top"><span><span class="dot"></span>Open Design · WebGL Preview</span><span>Real-time · GPU</span></div>
+  <div class="top"><span><span class="dot"></span>OpenDesign · WebGL Preview</span><span>Real-time · GPU</span></div>
   <div class="bottom">
     <div><h1>VORONOI<br><span class="thin">CELLS</span></h1>
       <p class="sub">A living Voronoi network — drifting feature points, palette-keyed cells, glowing boundaries. Move the cursor to push the cells.</p></div>
@@ -82,10 +82,10 @@ gl.useProgram(pr);
 const uRes=gl.getUniformLocation(pr,'u_res'),uTime=gl.getUniformLocation(pr,'u_time'),uMouse=gl.getUniformLocation(pr,'u_mouse');
 let mouse=[0.5,0.5],target=[0.5,0.5];
 addEventListener('pointermove',e=>{target=[e.clientX/innerWidth,1.0-e.clientY/innerHeight];});
-function resize(){const d=Math.min(devicePixelRatio||1,2);canvas.width=innerWidth*d|0;canvas.height=innerHeight*d|0;gl.viewport(0,0,canvas.width,canvas.height);}
+function resize(){const d=Math.min(devicePixelRatio||1,2),w=innerWidth*d|0,h=innerHeight*d|0;if(w===canvas.width&&h===canvas.height)return;canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}
 addEventListener('resize',resize);resize();
 const t0=performance.now();
-function frame(now){ mouse[0]+=(target[0]-mouse[0])*0.06; mouse[1]+=(target[1]-mouse[1])*0.06;
+function frame(now){ resize(); mouse[0]+=(target[0]-mouse[0])*0.06; mouse[1]+=(target[1]-mouse[1])*0.06;
   gl.uniform2f(uRes,canvas.width,canvas.height); gl.uniform1f(uTime,(now-t0)/1000); gl.uniform2f(uMouse,mouse[0],mouse[1]);
   gl.drawArrays(gl.TRIANGLES,0,3); requestAnimationFrame(frame); }
 requestAnimationFrame(frame);

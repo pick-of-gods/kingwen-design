@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execAgentFile } from './shared.js';
+import type { ModelCapability, ModelCost, ModelMetadata } from '@open-design/contracts';
 import type { RuntimeAgentDef, RuntimeModelOption } from '../types.js';
 
 const AMR_MODELS_TIMEOUT_MS = 10_000;
@@ -33,14 +34,15 @@ const OPENCODE_MODEL_PRICE_PROVIDER_PRIORITY = [
 //
 // Model wiring notes:
 //
-//   1. vela rejects `session/prompt` until `session/set_model` has been
-//      called, so AMR cannot accept the synthetic `default` model id —
-//      attachAcpSession skips set_model whenever model === 'default'.
+//   1. A concrete AMR model selection is applied through ACP
+//      `session/set_model`. The synthetic `default` model id intentionally
+//      skips that call so vela/OpenCode can use the account's configured
+//      upstream default.
 //
 //   2. Vela 0.0.1 exposes the current link-supported catalog through
 //      `vela models`, but that command prints public ids such as
 //      `public_model_deepseek_v3_2`. The ACP `session/set_model` call accepts
-//      the link-facing slug (`deepseek-v3.2` / `glm-5.1`), so Open Design
+//      the link-facing slug (`deepseek-v3.2` / `glm-5.1`), so OpenDesign
 //      normalizes those public ids at the daemon boundary until Vela exposes
 //      canonical ACP ids directly.
 export function normalizeVelaModelId(rawId: string): string | null {
@@ -98,10 +100,12 @@ function normalizeKnownVelaVersionId(rawId: string): string | null {
 
 function isVelaChatModelId(modelId: string): boolean {
   // Temporary chat-surface guard: Vela already lists media-generation models,
-  // but Open Design's AMR runtime currently drives only chat completions.
+  // but OpenDesign's AMR runtime currently drives only chat completions.
   // Remove this filter when AMR grows first-class image/video execution.
   const id = modelId.toLowerCase();
   if (id.startsWith('gpt-image-')) return false;
+  if (id.startsWith('nano-banana-')) return false;
+  if (id.startsWith('seedream-')) return false;
   if (id.startsWith('seedance-')) return false;
   if (id.startsWith('doubao-seedance-')) return false;
   if (id.startsWith('veo-')) return false;
@@ -164,19 +168,90 @@ function withVelaModelPriceFields(
   model: RuntimeModelOption,
   item: unknown,
 ): RuntimeModelOption {
+  const enabled = extractOptionalBoolean(item, ['enabled']);
+  const isDefault = extractOptionalBoolean(item, ['default']);
   const inputPriceUsdPerMillion = extractInputPriceUsdPerMillion(item);
   const outputPriceUsdPerMillion = extractOutputPriceUsdPerMillion(item);
+  const metadata = withPriceDerivedCostMetadata(
+    extractModelMetadata(item),
+    inputPriceUsdPerMillion,
+  );
   if (
+    enabled === undefined &&
+    isDefault === undefined &&
     inputPriceUsdPerMillion === undefined &&
-    outputPriceUsdPerMillion === undefined
+    outputPriceUsdPerMillion === undefined &&
+    metadata === null
   ) {
     return model;
   }
   return {
     ...model,
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(isDefault === undefined ? {} : { default: isDefault }),
     ...(inputPriceUsdPerMillion === undefined ? {} : { inputPriceUsdPerMillion }),
     ...(outputPriceUsdPerMillion === undefined ? {} : { outputPriceUsdPerMillion }),
+    ...(metadata === null ? {} : { metadata }),
   };
+}
+
+function extractModelMetadata(item: unknown): ModelMetadata | null {
+  if (!isRecord(item)) return null;
+  const metadata = isRecord(item.metadata) ? item.metadata : item;
+  const cost = parseModelCost(metadata.cost);
+  const capability = parseModelCapability(metadata.capability);
+  if (!cost && !capability) return null;
+  return {
+    ...(cost ? { cost } : {}),
+    ...(capability ? { capability } : {}),
+  };
+}
+
+function withPriceDerivedCostMetadata(
+  metadata: ModelMetadata | null,
+  inputPriceUsdPerMillion: number | undefined,
+): ModelMetadata | null {
+  if (metadata?.cost || inputPriceUsdPerMillion === undefined) return metadata;
+  return {
+    ...(metadata ?? {}),
+    cost: modelCostFromInputPrice(inputPriceUsdPerMillion),
+  };
+}
+
+function modelCostFromInputPrice(inputPriceUsdPerMillion: number): ModelCost {
+  if (inputPriceUsdPerMillion <= 0.5) return 'low';
+  if (inputPriceUsdPerMillion <= 1) return 'medium';
+  if (inputPriceUsdPerMillion <= 4) return 'high';
+  return 'very_high';
+}
+
+function parseModelCost(value: unknown): ModelCost | null {
+  return value === 'low' ||
+    value === 'medium' ||
+    value === 'high' ||
+    value === 'very_high'
+    ? value
+    : null;
+}
+
+function parseModelCapability(value: unknown): ModelCapability | null {
+  return value === 'standard' ||
+    value === 'advanced' ||
+    value === 'best_quality'
+    ? value
+    : null;
+}
+
+function extractOptionalBoolean(
+  item: unknown,
+  keys: string[],
+): boolean | undefined {
+  if (!isRecord(item)) return undefined;
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === 'boolean') return value;
+  }
+  return undefined;
 }
 
 function extractInputPriceUsdPerMillion(item: unknown): number | undefined {
@@ -272,7 +347,16 @@ function enrichVelaModelsFromOpenCodeCatalog(
   return models.map((model) => {
     if (model.inputPriceUsdPerMillion !== undefined) return model;
     const price = lookupOpenCodeModelPrice(catalog, model.id);
-    return price ? { ...model, ...price } : model;
+    if (!price) return model;
+    const metadata = {
+      ...(price.metadata ?? {}),
+      ...(model.metadata ?? {}),
+    };
+    return {
+      ...model,
+      ...price,
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    };
   });
 }
 
@@ -311,7 +395,7 @@ function lookupOpenCodeModelPrice(
   modelId: string,
 ): Pick<
   RuntimeModelOption,
-  'inputPriceUsdPerMillion' | 'outputPriceUsdPerMillion'
+  'inputPriceUsdPerMillion' | 'outputPriceUsdPerMillion' | 'metadata'
 > | null {
   for (const providerId of OPENCODE_MODEL_PRICE_PROVIDER_PRIORITY) {
     const provider = catalog[providerId];
@@ -328,7 +412,7 @@ function lookupProviderModel(
   modelId: string,
 ): Pick<
   RuntimeModelOption,
-  'inputPriceUsdPerMillion' | 'outputPriceUsdPerMillion'
+  'inputPriceUsdPerMillion' | 'outputPriceUsdPerMillion' | 'metadata'
 > | null {
   const lookupKeys = openCodeModelLookupKeys(modelId);
   for (const key of lookupKeys) {
@@ -376,15 +460,20 @@ function openCodeModelPrice(
   model: unknown,
 ): Pick<
   RuntimeModelOption,
-  'inputPriceUsdPerMillion' | 'outputPriceUsdPerMillion'
+  'inputPriceUsdPerMillion' | 'outputPriceUsdPerMillion' | 'metadata'
 > | null {
   if (!isRecord(model)) return null;
   const inputPriceUsdPerMillion = extractInputPriceUsdPerMillion(model);
   if (inputPriceUsdPerMillion === undefined) return null;
   const outputPriceUsdPerMillion = extractOutputPriceUsdPerMillion(model);
+  const metadata = withPriceDerivedCostMetadata(
+    extractModelMetadata(model),
+    inputPriceUsdPerMillion,
+  );
   return {
     inputPriceUsdPerMillion,
     ...(outputPriceUsdPerMillion === undefined ? {} : { outputPriceUsdPerMillion }),
+    ...(metadata === null ? {} : { metadata }),
   };
 }
 
@@ -480,7 +569,7 @@ export async function fetchVelaRemoteModelsWithRetry(
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= AMR_MODELS_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      const { stdout } = await execAgentFile(resolvedBin, ['model', 'list', '--format', 'json'], {
+      const { stdout } = await execAgentFile(resolvedBin, ['model', 'list', '--all', '--format', 'json'], {
         env,
         timeout: AMR_MODELS_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
@@ -574,12 +663,16 @@ export const amrAgentDef = {
   // surfaces the live Vela catalog instead.
   supportsCustomModel: false,
   supportsImagePaths: true,
-  // Daemon-process env override for emergency operator pinning. Normal UI
-  // selection comes from the live `vela models` catalog and is preflighted
-  // before spawn.
+  // Daemon-process env override for emergency operator pinning when no model
+  // was selected. Explicit UI selections, including `default`, win.
   defaultModelEnvVar: 'VELA_DEFAULT_MODEL',
   // Vela/OpenCode can spend extended stretches silent while the upstream
   // provider is still working. Keep the outer chat watchdog aligned with the
   // 30-minute ACP stage timeout so the daemon does not fail the run first.
   inactivityTimeoutMs: 30 * 60 * 1000,
+  // Once the ACP handshake has completed and session/prompt is waiting on the
+  // provider, transport/status heartbeats must not leave the UI in Preparing
+  // indefinitely. Two minutes leaves conservative provider-startup headroom
+  // while still bounding the user's wait and one safe same-run retry.
+  firstOutputTimeoutMs: 2 * 60 * 1000,
 } satisfies RuntimeAgentDef;

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Pixel Reveal Gallery — Open Design</title>
+<title>Pixel Reveal Gallery — OpenDesign</title>
 <!--
   Faithful single-file port of J0SUKE's "Pixel Image Effect" scroll-reveal
   gallery (Codrops). Original: https://github.com/J0SUKE/gsap-threejs-codrops
@@ -53,7 +53,7 @@
 <body>
 <canvas id="webgl"></canvas>
 <div class="frame">
-  <span><span class="dot"></span>Open Design · WebGL Preview</span>
+  <span><span class="dot"></span>OpenDesign · WebGL Preview</span>
   <span>Effect: <a href="https://github.com/J0SUKE/gsap-threejs-codrops" target="_blank">J0SUKE / Codrops</a></span>
 </div>
 
@@ -190,8 +190,11 @@ function whenImagesReady(cb){
 }
 whenImagesReady(boot);
 
-addEventListener('resize',()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight); computeSizes(); medias.forEach(m=>m.onResize()); ScrollTrigger.refresh(); });
+function onResize(){ const w=innerWidth,h=innerHeight; if(w===onResize._w&&h===onResize._h)return; onResize._w=w; onResize._h=h;
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  renderer.setSize(w,h); computeSizes(); medias.forEach(m=>m.onResize()); ScrollTrigger.refresh(); }
+addEventListener('resize',onResize);
+gsap.ticker.add(onResize);
 
 // ---- click → fullscreen detail (in-page Flip, replaces Barba page nav) ----
 function bindDetail(){

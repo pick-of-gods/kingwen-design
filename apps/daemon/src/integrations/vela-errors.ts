@@ -1,9 +1,12 @@
-export type AmrAccountErrorCode = 'AMR_AUTH_REQUIRED' | 'AMR_INSUFFICIENT_BALANCE';
+export type AmrAccountErrorCode =
+  | 'AMR_AUTH_REQUIRED'
+  | 'AMR_INSUFFICIENT_BALANCE'
+  | 'AMR_TIER_UPGRADE_REQUIRED';
 
 export interface AmrAccountFailure {
   code: AmrAccountErrorCode;
   message: string;
-  action: 'relogin' | 'recharge';
+  action: 'relogin' | 'recharge' | 'upgrade';
   actionUrl?: string;
 }
 
@@ -16,16 +19,26 @@ export interface AmrAccountFailureSignal {
   stderrTail?: unknown;
 }
 
-// `source=open_design` tags the wallet landing page_view so vela analytics can
-// attribute the recharge visit to Open Design.
+// `source=open_design` tags the console landing page_view so vela analytics can
+// attribute the recharge visit to OpenDesign.
+//
+// The console dashboard, not a wallet page: balance and manual top-up were
+// rehomed onto it (vela #1055) and the wallet route left the product's
+// information architecture, so this link must not send a user there.
 export const DEFAULT_AMR_RECHARGE_URL =
-  'https://open-design.ai/amr/wallet?source=open_design';
+  'https://open-design.ai/amr/dashboard?source=open_design';
 
 const AMR_AUTH_REQUIRED_MESSAGE =
   'AMR sign-in is required. Sign in to AMR Cloud again, then retry this run.';
 
 const AMR_INSUFFICIENT_BALANCE_MESSAGE =
-  `AMR Cloud reported insufficient balance for this model. Recharge your AMR wallet at ${DEFAULT_AMR_RECHARGE_URL}, then retry this run.`;
+  `AMR Cloud reported insufficient balance for this model. Top up your AMR balance at ${DEFAULT_AMR_RECHARGE_URL}, then retry this run.`;
+
+const AMR_TIER_UPGRADE_REQUIRED_MESSAGE =
+  'Your current AMR plan does not include this model or request type. Upgrade your AMR plan, or switch to an available model and retry.';
+
+const AMR_TIER_REQUEST_KIND_NOT_ENTITLED_MESSAGE =
+  'Your current AMR plan does not include this request type yet. Upgrade your AMR plan, or switch to a supported model and retry.';
 
 function normalizeFailureText(text: string): string {
   return String(text || '').toLowerCase();
@@ -74,6 +87,30 @@ export function classifyAmrAccountFailureDetails(details: unknown): AmrAccountFa
     };
   }
 
+  if (code === 'tier_model_not_entitled') {
+    return {
+      code: 'AMR_TIER_UPGRADE_REQUIRED',
+      message: AMR_TIER_UPGRADE_REQUIRED_MESSAGE,
+      action: 'upgrade',
+    };
+  }
+
+  if (code === 'tier_request_kind_not_entitled') {
+    return {
+      code: 'AMR_TIER_UPGRADE_REQUIRED',
+      message: AMR_TIER_REQUEST_KIND_NOT_ENTITLED_MESSAGE,
+      action: 'upgrade',
+    };
+  }
+
+  if (code === 'auth_required' || accountAction === 'relogin') {
+    return {
+      code: 'AMR_AUTH_REQUIRED',
+      message: AMR_AUTH_REQUIRED_MESSAGE,
+      action: 'relogin',
+    };
+  }
+
   return null;
 }
 
@@ -111,6 +148,22 @@ export function classifyAmrAccountFailure(text: string): AmrAccountFailure | nul
       message: AMR_INSUFFICIENT_BALANCE_MESSAGE,
       action: 'recharge',
       actionUrl: DEFAULT_AMR_RECHARGE_URL,
+    };
+  }
+
+  if (value.includes('tier_model_not_entitled')) {
+    return {
+      code: 'AMR_TIER_UPGRADE_REQUIRED',
+      message: AMR_TIER_UPGRADE_REQUIRED_MESSAGE,
+      action: 'upgrade',
+    };
+  }
+
+  if (value.includes('tier_request_kind_not_entitled')) {
+    return {
+      code: 'AMR_TIER_UPGRADE_REQUIRED',
+      message: AMR_TIER_REQUEST_KIND_NOT_ENTITLED_MESSAGE,
+      action: 'upgrade',
     };
   }
 

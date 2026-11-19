@@ -16,6 +16,7 @@ import {
   setExceptionTrackingContext,
 } from './error-tracking';
 import { pinFirstSessionForCapture } from './identity';
+import { coalescedGet } from '../lib/coalesced-get';
 
 interface AnalyticsContext {
   anonymousId: string;
@@ -50,11 +51,11 @@ let configureGlobals: AnalyticsConfigureGlobals = {
 // `event_schema_version`, `device_id`, `session_id`, `locale`, or the
 // configure-state globals. We restash this on init and re-register it
 // after every reset()/identify() so every subsequent event keeps the
-// v2 schema contract.
+// current schema contract.
 let lastRegisterPayload: Record<string, unknown> | null = null;
 
 // Returns the installationId the daemon stamped on /api/analytics/config
-// after the user opted in via Privacy → "Share usage data". The provider
+// after the user opted in via Privacy → "Share". The provider
 // uses this in preference to its locally-generated UUID so PostHog,
 // Langfuse, and any future sink share a single anonymous identity.
 //
@@ -181,17 +182,36 @@ function flushPersonProperties(): void {
 // When the user has consented, both paths fetch the same endpoint once
 // each; the duplicate fetch is cheap and avoids cross-coupling the
 // (consent-gated) analytics init with the (always-on) error tracker.
+
+// Both the always-on exception tracker and the consent-gated analytics init
+// read /api/analytics/config at boot; share one request per burst instead of
+// issuing two identical GETs (Batch A §4.3). `null` mirrors the endpoint's
+// non-ok answer; network failures propagate to each caller's own handler.
+function fetchAnalyticsConfigShared(): Promise<AnalyticsConfigResponse | null> {
+  // ttl 0: share only genuinely concurrent readers. A later sequential call
+  // (e.g. re-init right after the user grants consent) must observe the
+  // just-flipped daemon answer, not a sub-second-old disabled snapshot.
+  return coalescedGet(
+    'analytics-config',
+    async () => {
+      const res = await fetch('/api/analytics/config');
+      if (!res.ok) return null;
+      return (await res.json()) as AnalyticsConfigResponse;
+    },
+    0,
+  );
+}
+
 let exceptionBootstrapPromise: Promise<void> | null = null;
 export function bootstrapExceptionTracking(context: AnalyticsContext): Promise<void> {
   if (exceptionBootstrapPromise) return exceptionBootstrapPromise;
   exceptionBootstrapPromise = (async () => {
     try {
-      const res = await fetch('/api/analytics/config');
-      if (!res.ok) {
+      const cfg = await fetchAnalyticsConfigShared();
+      if (!cfg) {
         clearExceptionTrackingContext();
         return;
       }
-      const cfg = (await res.json()) as AnalyticsConfigResponse;
       if (!cfg.key || !cfg.host) {
         clearExceptionTrackingContext();
         return;
@@ -230,9 +250,8 @@ export async function getAnalyticsClient(
   // trigger a fresh init.
   const pending = (async () => {
     try {
-      const res = await fetch('/api/analytics/config');
-      if (!res.ok) return null;
-      const cfg = (await res.json()) as AnalyticsConfigResponse;
+      const cfg = await fetchAnalyticsConfigShared();
+      if (!cfg) return null;
       if (!cfg.enabled || !cfg.key || !cfg.host) return null;
       const telemetryEnv = cfg.env || 'unknown';
       const distinctId =
@@ -256,7 +275,7 @@ export async function getAnalyticsClient(
         // various automation flags). The list also rejects some real users
         // — embedded webviews, fingerprinted browsers, e2e CI runs — which
         // is unacceptable for product analytics that needs to count every
-        // session. We instead rely on the Privacy → "Share usage data"
+        // session. We instead rely on the Privacy → "Share"
         // toggle as the single consent gate and treat every UA equally.
         opt_out_useragent_filter: true,
 
@@ -305,7 +324,7 @@ export async function getAnalyticsClient(
         // and over-redact every content surface — the same
         // "redact-by-default, single audit point" philosophy scrub.ts
         // uses for events (see scrub.ts header). Replay stays gated by the
-        // existing Privacy → "Share usage data" consent: posthog-js's
+        // existing Privacy → "Share" consent: posthog-js's
         // global opt_out_capturing() halts replay too (see applyConsent()).
         //
         // The three redaction layers, in order of how much they cover:
